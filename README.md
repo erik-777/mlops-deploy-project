@@ -68,4 +68,4 @@ infra/
 utils/
   diagram-architecture.png  # Diagrama de arquitectura
 
-README.md
+
