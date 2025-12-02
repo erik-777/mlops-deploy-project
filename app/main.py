@@ -23,7 +23,7 @@ def health():
 def predict(req: PredictRequest):
     """
     Recibe una imagen 28x28 aplastada en un vector de 784 elementos y
-    devuelve el dígito predicho (0–9).
+    devuelve el dígito predicho (0–9)
     """
     arr = np.array(req.data, dtype=np.float32).reshape(1, 1, 28, 28)
     output = model_service.predict(arr)  # shape [1, 10]
