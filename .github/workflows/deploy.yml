@@ -144,6 +144,7 @@ jobs:
           host: ${{ secrets.EC2_PROD_HOST }}
           username: ec2-user
           key: ${{ secrets.EC2_SSH_KEY_PROD }}
+          envs: IMAGE_TAG,ECR_REPOSITORY,BUCKET_NAME,PRED_FILE,REGISTRY
           script: |
             REGISTRY="${{ steps.login-ecr.outputs.registry }}"
             REPOSITORY="${{ secrets.ECR_REPOSITORY }}"
