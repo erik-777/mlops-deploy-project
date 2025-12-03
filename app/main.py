@@ -17,6 +17,10 @@ app = FastAPI(title=f"MNIST ONNX API - {settings.environment}")
 def health():
     return {"status": "ok", "env": settings.environment}
 
+@app.get("/check")
+def health():
+    return {"status": "check", "env": settings.environment}
+
 
 @app.post("/predict")
 def predict(req: PredictRequest):
