@@ -3,7 +3,7 @@ import onnxruntime as ort
 import numpy as np
 from botocore.exceptions import ClientError
 
-from .settings import settings
+from settings import settings   
 
 
 class ModelService:

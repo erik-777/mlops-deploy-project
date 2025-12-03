@@ -3,7 +3,7 @@ from pydantic import BaseModel
 import numpy as np
 
 from model_service import model_service
-from settings import settings   # 🔥 fix importante
+from settings import settings   
 
 
 class PredictRequest(BaseModel):
