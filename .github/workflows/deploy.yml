@@ -100,12 +100,19 @@ jobs:
           username: ec2-user
           key: ${{ secrets.EC2_SSH_KEY_DEV }}
           script: |
-            aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin ${{ steps.login-ecr.outputs.registry }}
+            echo "Logging into ECR..."
+            aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin ${{ steps.login-ecr.outputs.registry }}
+
+            echo "Pulling new image..."
             docker pull ${{ steps.login-ecr.outputs.registry }}/${{ secrets.ECR_REPOSITORY }}:$IMAGE_TAG
+
+            echo "Stopping old container..."
             docker stop api || true
             docker rm api || true
+
+            echo "Running container..."
             docker run -d --name api -p 80:8000 \
-              -e AWS_REGION=$AWS_REGION \
+              -e AWS_REGION=us-east-1 \
               -e BUCKET_NAME=${{ secrets.BUCKET_NAME }} \
               -e ENVIRONMENT=dev \
               -e PREDICTIONS_FILE_KEY=${{ secrets.PREDICTIONS_FILE_DEV_KEY }} \
