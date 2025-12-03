@@ -23,7 +23,7 @@ Permitir que **nuevos modelos ONNX** puedan ser desplegados de forma automática
 
 ## Arquitectura
 
-![Diagrama de Arquitectura](/mlops-deploy-project/infra/Diagrama%20de%20Componentes.png "Diagrama de Arquitectura")
+![Diagrama de Arquitectura](/mlops-deploy-project/utils/Diagrama%20de%20Componentes.png "Diagrama de Arquitectura")
 
 - **S3**  
   - `models/mnist-12.onnx` → modelo ONNX  
@@ -65,7 +65,6 @@ docker/
 infra/
   ec2-dev-setup.md     # Notas de configuración de EC2 dev (documental)
   ec2-prod-setup.md    # Notas de configuración de EC2 prod (documental)
-  iam-policy.json      # Política IAM de ejemplo para S3/ECR
 
 utils/
-  diagram-architecture.png  # Diagrama de arquitectura
+  Diagrama de Componentes.png  # Diagrama de arquitectura
