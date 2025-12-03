@@ -34,25 +34,33 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Download model from S3
+        run: |
+          python scripts/download_model.py
         env:
           BUCKET_NAME: ${{ secrets.BUCKET_NAME }}
           MODEL_KEY: ${{ secrets.MODEL_KEY }}
-        run: |
-          python scripts/download_model.py
 
       - name: Download test data from S3
+        run: |
+          python scripts/download_test_data.py
         env:
           BUCKET_NAME: ${{ secrets.BUCKET_NAME }}
           TEST_DATA_KEY: ${{ secrets.TEST_DATA_KEY }}
-        run: |
-          python scripts/download_test_data.py
 
       - name: Run tests
         run: pytest app/tests -v
 
+
   build_and_deploy:
     needs: test
     runs-on: ubuntu-latest
+
+    env:
+      AWS_REGION: us-east-1
+      ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+      BUCKET_NAME: ${{ secrets.BUCKET_NAME }}
+      MODEL_KEY: ${{ secrets.MODEL_KEY }}
+      TEST_DATA_KEY: ${{ secrets.TEST_DATA_KEY }}
 
     steps:
       - name: Checkout code
@@ -63,74 +71,71 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
+          aws-region: us-east-1
 
-      - name: Download model for image build
+      - name: Download model for Docker build
+        run: python scripts/download_model.py
         env:
           BUCKET_NAME: ${{ secrets.BUCKET_NAME }}
           MODEL_KEY: ${{ secrets.MODEL_KEY }}
-        run: |
-          python scripts/download_model.py
 
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
       - name: Build Docker image
-        env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
         run: |
           IMAGE_TAG=${GITHUB_SHA}
-          docker build -f docker/Dockerfile -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
           echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
-
+          docker build -f docker/Dockerfile \
+            -t ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:$IMAGE_TAG .
+      
       - name: Push image to ECR
-        env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
         run: |
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:$IMAGE_TAG
+
+
+      #############################################
+      #               DEPLOY DEV                 #
+      #############################################
 
       - name: Deploy to EC2 (DEV)
         if: github.ref == 'refs/heads/dev'
         uses: appleboy/ssh-action@v1.0.3
-        env:
-          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
-          BUCKET: ${{ secrets.BUCKET_NAME }}
-          PRED_FILE: ${{ secrets.PREDICTIONS_FILE_DEV_KEY }}
-          IMAGE_TAG: ${{ env.IMAGE_TAG }}
         with:
           host: ${{ secrets.EC2_DEV_HOST }}
           username: ec2-user
           key: ${{ secrets.EC2_SSH_KEY_DEV }}
+          envs: IMAGE_TAG,ECR_REPOSITORY,BUCKET_NAME,PRED_FILE,REGISTRY
           script: |
+            REGISTRY="${{ steps.login-ecr.outputs.registry }}"
+            REPOSITORY="${{ secrets.ECR_REPOSITORY }}"
+            BUCKET="${{ secrets.BUCKET_NAME }}"
+            PRED_FILE="${{ secrets.PREDICTIONS_FILE_DEV_KEY }}"
+
             echo "Logging into ECR..."
-            aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin $REGISTRY
+            aws ecr get-login-password --region us-east-1 \
+              | docker login --username AWS --password-stdin $REGISTRY
 
             echo "Pulling new image..."
             docker pull $REGISTRY/$REPOSITORY:$IMAGE_TAG
-            
-            echo "DEBUG VARS:"
-            echo "REGISTRY=[$REGISTRY]"
-            echo "REPOSITORY=[$REPOSITORY]"
-            echo "IMAGE_TAG=[$IMAGE_TAG]"
-            echo "BUCKET=[$BUCKET]"
-            echo "PRED_FILE=[$PRED_FILE]"
 
             echo "Stopping old container..."
             docker stop api || true
             docker rm api || true
 
-            echo "Running container..."
+            echo "Running new container..."
             docker run -d --name api -p 80:8000 \
               -e AWS_REGION=us-east-1 \
-              -e BUCKET_NAME=$BUCKET \
+              -e BUCKET_NAME="$BUCKET" \
               -e ENVIRONMENT=dev \
-              -e PREDICTIONS_FILE_KEY=$PRED_FILE \
+              -e PREDICTIONS_FILE_KEY="$PRED_FILE" \
               $REGISTRY/$REPOSITORY:$IMAGE_TAG
 
+
+      #############################################
+      #               DEPLOY PROD                #
+      #############################################
 
       - name: Deploy to EC2 (PROD)
         if: github.ref == 'refs/heads/prod'
@@ -140,13 +145,22 @@ jobs:
           username: ec2-user
           key: ${{ secrets.EC2_SSH_KEY_PROD }}
           script: |
-            aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin ${{ steps.login-ecr.outputs.registry }}
-            docker pull ${{ steps.login-ecr.outputs.registry }}/${{ secrets.ECR_REPOSITORY }}:$IMAGE_TAG
+            REGISTRY="${{ steps.login-ecr.outputs.registry }}"
+            REPOSITORY="${{ secrets.ECR_REPOSITORY }}"
+            BUCKET="${{ secrets.BUCKET_NAME }}"
+            PRED_FILE="${{ secrets.PREDICTIONS_FILE_PROD_KEY }}"
+
+            aws ecr get-login-password --region us-east-1 \
+              | docker login --username AWS --password-stdin $REGISTRY
+
+            docker pull $REGISTRY/$REPOSITORY:$IMAGE_TAG
+
             docker stop api || true
             docker rm api || true
+
             docker run -d --name api -p 80:8000 \
-              -e AWS_REGION=$AWS_REGION \
-              -e BUCKET_NAME=${{ secrets.BUCKET_NAME }} \
+              -e AWS_REGION=us-east-1 \
+              -e BUCKET_NAME="$BUCKET" \
               -e ENVIRONMENT=prod \
-              -e PREDICTIONS_FILE_KEY=${{ secrets.PREDICTIONS_FILE_PROD_KEY }} \
-              ${{ steps.login-ecr.outputs.registry }}/${{ secrets.ECR_REPOSITORY }}:$IMAGE_TAG
+              -e PREDICTIONS_FILE_KEY="$PRED_FILE" \
+              $REGISTRY/$REPOSITORY:$IMAGE_TAG
