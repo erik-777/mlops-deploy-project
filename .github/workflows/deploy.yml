@@ -1,0 +1,166 @@
+name: CI/CD ONNX MNIST
+
+on:
+  push:
+    branches:
+      - dev
+      - prod
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -r app/requirements.txt
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Download model from S3
+        run: |
+          python scripts/download_model.py
+        env:
+          BUCKET_NAME: ${{ secrets.BUCKET_NAME }}
+          MODEL_KEY: ${{ secrets.MODEL_KEY }}
+
+      - name: Download test data from S3
+        run: |
+          python scripts/download_test_data.py
+        env:
+          BUCKET_NAME: ${{ secrets.BUCKET_NAME }}
+          TEST_DATA_KEY: ${{ secrets.TEST_DATA_KEY }}
+
+      - name: Run tests
+        run: pytest app/tests -v
+
+
+  build_and_deploy:
+    needs: test
+    runs-on: ubuntu-latest
+
+    env:
+      AWS_REGION: us-east-1
+      ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+      BUCKET_NAME: ${{ secrets.BUCKET_NAME }}
+      MODEL_KEY: ${{ secrets.MODEL_KEY }}
+      TEST_DATA_KEY: ${{ secrets.TEST_DATA_KEY }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Download model for Docker build
+        run: python scripts/download_model.py
+        env:
+          BUCKET_NAME: ${{ secrets.BUCKET_NAME }}
+          MODEL_KEY: ${{ secrets.MODEL_KEY }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build Docker image
+        run: |
+          IMAGE_TAG=${GITHUB_SHA}
+          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
+          docker build -f docker/Dockerfile \
+            -t ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:$IMAGE_TAG .
+      
+      - name: Push image to ECR
+        run: |
+          docker push ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:$IMAGE_TAG
+
+
+      #############################################
+      #               DEPLOY DEV                 #
+      #############################################
+
+      - name: Deploy to EC2 (DEV)
+        if: github.ref == 'refs/heads/dev'
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_DEV_HOST }}
+          username: ec2-user
+          key: ${{ secrets.EC2_SSH_KEY_DEV }}
+          envs: IMAGE_TAG,ECR_REPOSITORY,BUCKET_NAME,PRED_FILE,REGISTRY
+          script: |
+            REGISTRY="${{ steps.login-ecr.outputs.registry }}"
+            REPOSITORY="${{ secrets.ECR_REPOSITORY }}"
+            BUCKET="${{ secrets.BUCKET_NAME }}"
+            PRED_FILE="${{ secrets.PREDICTIONS_FILE_DEV_KEY }}"
+
+            echo "Logging into ECR..."
+            aws ecr get-login-password --region us-east-1 \
+              | docker login --username AWS --password-stdin $REGISTRY
+
+            echo "Pulling new image..."
+            docker pull $REGISTRY/$REPOSITORY:$IMAGE_TAG
+
+            echo "Stopping old container..."
+            docker stop api || true
+            docker rm api || true
+
+            echo "Running new container..."
+            docker run -d --name api -p 80:8000 \
+              -e AWS_REGION=us-east-1 \
+              -e BUCKET_NAME="$BUCKET" \
+              -e ENVIRONMENT=dev \
+              -e PREDICTIONS_FILE_KEY="$PRED_FILE" \
+              $REGISTRY/$REPOSITORY:$IMAGE_TAG
+
+
+      #############################################
+      #               DEPLOY PROD                #
+      #############################################
+
+      - name: Deploy to EC2 (PROD)
+        if: github.ref == 'refs/heads/prod'
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_PROD_HOST }}
+          username: ec2-user
+          key: ${{ secrets.EC2_SSH_KEY_PROD }}
+          script: |
+            REGISTRY="${{ steps.login-ecr.outputs.registry }}"
+            REPOSITORY="${{ secrets.ECR_REPOSITORY }}"
+            BUCKET="${{ secrets.BUCKET_NAME }}"
+            PRED_FILE="${{ secrets.PREDICTIONS_FILE_PROD_KEY }}"
+
+            aws ecr get-login-password --region us-east-1 \
+              | docker login --username AWS --password-stdin $REGISTRY
+
+            docker pull $REGISTRY/$REPOSITORY:$IMAGE_TAG
+
+            docker stop api || true
+            docker rm api || true
+
+            docker run -d --name api -p 80:8000 \
+              -e AWS_REGION=us-east-1 \
+              -e BUCKET_NAME="$BUCKET" \
+              -e ENVIRONMENT=prod \
+              -e PREDICTIONS_FILE_KEY="$PRED_FILE" \
+              $REGISTRY/$REPOSITORY:$IMAGE_TAG
