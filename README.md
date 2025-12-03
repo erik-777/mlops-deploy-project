@@ -23,6 +23,8 @@ Permitir que **nuevos modelos ONNX** puedan ser desplegados de forma automática
 
 ## Arquitectura
 
+![Diagrama de Arquitectura](/mlops-deploy-project/infra/Diagrama%20de%20Componentes.png "Diagrama de Arquitectura")
+
 - **S3**  
   - `models/mnist-12.onnx` → modelo ONNX  
   - `test_data/mnist_test.npz` → datos de prueba  
